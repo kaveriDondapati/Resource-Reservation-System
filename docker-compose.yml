@@ -1,0 +1,126 @@
+name: resource-reservation
+
+x-app-env: &app-env
+  JWT_SECRET: dev-only-change-me-please-use-32-plus-characters
+  JWT_EXPIRATION: "3600000"
+  EUREKA_URL: http://discovery-service:8761/eureka/
+  DB_USERNAME: postgres
+  DB_PASSWORD: postgres
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  discovery-service:
+    build: ./discovery-service
+    ports:
+      - "8761:8761"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8761'"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 40s
+
+  auth-service:
+    build: ./Auth-service/Auth-service
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/auth_db
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: Admin@123
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      discovery-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8081'"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 60s
+
+  resource-service:
+    build: ./Resource-service/Resource-service
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/resource_db
+      SEED_RESOURCES: "true"
+    ports:
+      - "8082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      discovery-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8082'"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 60s
+
+  reservation-service:
+    build: ./Reservation-service/Reservation-service
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/reservation_db
+      RESOURCE_SERVICE_URL: http://resource-service:8082
+    ports:
+      - "8083:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      discovery-service:
+        condition: service_started
+      resource-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8083'"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 60s
+
+  api-gateway:
+    build: ./api-gateway/api-gateway
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8081
+      RESOURCE_SERVICE_URL: http://resource-service:8082
+      RESERVATION_SERVICE_URL: http://reservation-service:8083
+      EUREKA_URL: http://discovery-service:8761/eureka/
+    ports:
+      - "8080:8080"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      resource-service:
+        condition: service_healthy
+      reservation-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8080'"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 40s
+
+volumes:
+  pgdata:
